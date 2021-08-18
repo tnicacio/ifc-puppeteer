@@ -114,7 +114,7 @@ const sigifc = {
         await clickOnAnchorWithOnClickText(sigifc.page, classOnClickText);
       }
     } catch (e) {
-      console.log(`Error when going to class ${className}`, e);
+      console.log(`Error when going to class ${sigifc.classeAtual}`, e);
     }
   },
 
