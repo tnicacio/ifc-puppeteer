@@ -1,16 +1,24 @@
 const puppeteer = require('puppeteer');
+const path = require('path');
+const dir = require('./utils/Downloader');
 
 const BASE_URL = 'https://sig.ifc.edu.br/sigaa/';
+const DOWNLOAD_PATH = './downloads';
+const enumActions = {
+  FILES: 'files',
+  GRADES: 'grades',
+};
 
 const sigifc = {
   browser: null,
   page: null,
   classes: [],
-  classeAtual: '',
+  currentClass: '',
 
   initialize: async () => {
     try {
       sigifc.browser = await puppeteer.launch({
+        defaultViewport: null,
         headless: false,
       });
 
@@ -52,7 +60,6 @@ const sigifc = {
 
   goToAllClassesPage: async () => {
     try {
-      // await sigifc.page.waitForTimeout(3000);
       await sigifc.page.goto(`${BASE_URL}portais/discente/turmas.jsf`, {
         waitUntil: 'domcontentloaded',
       });
@@ -63,37 +70,41 @@ const sigifc = {
 
   getClasses: async () => {
     try {
-      const turmas = await sigifc.page.evaluate(() => {
-        const arrayTurmas = [];
+      const allClasses = await sigifc.page.evaluate(() => {
+        const arrayOfClasses = [];
 
-        const linhasPares = Array.from(
+        const evenLines = Array.from(
           document.querySelectorAll('tbody > tr[class="linhaPar"]')
         );
+        const oddLines = Array.from(
+          document.querySelectorAll('tbody > tr[class="linhaImpar"]')
+        );
+        const allLines = [...evenLines, ...oddLines];
 
-        for (const linha of linhasPares) {
-          const colunas = linha?.children;
+        for (const line of allLines) {
+          const columns = line?.children;
 
-          const lenghtColumnOnClick = colunas[4]?.children?.length;
+          const lenghtColumnOnClick = columns[4]?.children?.length;
 
-          const turma = {
-            nome: colunas[0]?.innerHTML,
-            turma: colunas[1]?.innerHTML,
-            cargaHoraria: colunas[2]?.innerHTML,
-            horario: colunas[3]?.innerHTML,
+          const classObj = {
+            name: columns[0]?.innerHTML,
+            classNumber: columns[1]?.innerHTML,
+            workload: columns[2]?.innerHTML,
+            schedule: columns[3]?.innerHTML,
             onClickText:
               lenghtColumnOnClick === 2
-                ? colunas[4]?.children?.item(1)?.getAttribute('onclick')
-                : colunas[4]?.children?.item(0)?.getAttribute('onclick'),
+                ? columns[4]?.children?.item(1)?.getAttribute('onclick')
+                : columns[4]?.children?.item(0)?.getAttribute('onclick'),
           };
 
-          arrayTurmas.push(turma);
+          arrayOfClasses.push(classObj);
         }
 
-        return arrayTurmas;
+        return arrayOfClasses;
       });
 
-      sigifc.classes = turmas;
-      return turmas;
+      sigifc.classes = allClasses;
+      return allClasses;
     } catch (e) {
       console.log('on getClasses', e);
     }
@@ -105,53 +116,41 @@ const sigifc = {
       const upperCaseClassName = className.toUpperCase();
 
       const classFound = classes.find((classe) =>
-        classe.nome.includes(upperCaseClassName)
+        classe.name.includes(upperCaseClassName)
       );
 
       if (classFound) {
-        sigifc.classeAtual = classFound.nome;
+        sigifc.currentClass = classFound.name;
         const classOnClickText = classFound.onClickText;
+        await sigifc.page.waitForTimeout(2000);
         await clickOnAnchorWithOnClickText(sigifc.page, classOnClickText);
       }
     } catch (e) {
-      console.log(`Error when going to class ${sigifc.classeAtual}`, e);
+      console.log(`Error when going to class ${sigifc.currentClass}`, e);
     }
   },
 
-  goToClassMaterialsPage: async (classe) => {
+  goToClassFilesPage: async (classe) => {
     try {
       await sigifc.page.waitForTimeout(5000);
-      // await sigifc.page.waitForNavigation({ waitUntil: 'networkidle2' });
 
       await sigifc.page.evaluate(() =>
         document.querySelector('div[class*=itemMenuHeaderMateriais]')?.click()
       );
-      // await sigifc.page.click('div[class*=itemMenuHeaderMateriais]');
-      // await sigifc.page.waitForTimeout(5000);
-      // const onClickText = await sigifc.page.evaluate(() => {
-      //   const anchorElement = Array.from(document.querySelectorAll('a')).find(
-      //     (a) => a.children?.item(0)?.innerHTML?.includes('Arquivos')
-      //   );
-      //   const anchorText = anchorElement?.getAttribute('onclick');
-      //   return anchorText;
-      // });
+
       await sigifc.page.evaluate(() =>
         Array.from(document.querySelectorAll('a'))
           .find((a) => a.children?.item(0)?.innerHTML?.includes('Arquivos'))
           ?.click()
       );
-
-      // await clickOnAnchorWithOnClickText(sigifc.page, onClickText);
-      // await sigifc.page.waitForTimeout(3000);
     } catch (e) {
-      console.log(`Error when opening materials of ${classe}`, e);
+      console.log(`Error when going to files page of ${classe}`, e);
     }
   },
 
   downloadAllFiles: async (classe) => {
     try {
       await sigifc.page.waitForTimeout(5000);
-      // await sigifc.page.waitForNavigation({ waitUntil: 'networkidle2' });
       const downloadAllFilesSelector = await sigifc.page.evaluate(() => {
         const anchorElement = Array.from(document.querySelectorAll('a')).find(
           (a) => a.innerHTML?.includes('Baixar todos os arquivos')
@@ -161,15 +160,66 @@ const sigifc = {
       });
 
       if (!downloadAllFilesSelector) {
-        console.log(`No files found for ${classe}`);
+        console.log(`No files found for ${sigifc.currentClass}`);
         return;
       }
 
+      const downloadPath = setUpDirectory(
+        sigifc.currentClass,
+        enumActions.FILES
+      );
+      await sigifc.page._client.send('Page.setDownloadBehavior', {
+        behavior: 'allow',
+        downloadPath: downloadPath,
+      });
+      await sigifc.page.waitForTimeout(2000);
       await clickOnAnchorWithOnClickText(sigifc.page, downloadAllFilesSelector);
       await sigifc.page.waitForTimeout(3000);
       console.log(`Files of ${classe} downloaded with success`);
     } catch (e) {
-      console.log(`Error when downloading files of ${classe}`, e);
+      console.log(`Error while downloading files of ${classe}`, e);
+    }
+  },
+
+  goToClassGradesPage: async (classe) => {
+    try {
+      await sigifc.page.waitForTimeout(5000);
+
+      await sigifc.page.evaluate(() =>
+        document.querySelector('div[class*=itemMenuHeaderAlunos]')?.click()
+      );
+
+      await sigifc.page.evaluate(() =>
+        Array.from(document.querySelectorAll('a'))
+          .find((a) => a.children?.item(0)?.innerHTML?.includes('Ver Notas'))
+          ?.click()
+      );
+    } catch (e) {
+      console.log(`Error when going to grades page of ${classe}`, e);
+    }
+  },
+
+  takeAScreenshotOfClassGrades: async (classe) => {
+    try {
+      await sigifc.page.waitForTimeout(3000);
+      const screenshotPath = setUpDirectory(
+        sigifc.currentClass,
+        enumActions.GRADES
+      );
+
+      //To-study: regex
+      const fileName = new Date()
+        .toLocaleString()
+        .replace(/\//g, '')
+        .replace(/:/g, '')
+        .replace(/ /g, '');
+      console.log(`Taking screenshot of ${classe} grades`);
+      await sigifc.page.screenshot({
+        path: `${screenshotPath}/${fileName}.png`,
+      });
+      await sigifc.page.waitForTimeout(2000);
+    } catch (e) {
+      console.log(`Error while getting grades of ${classe}`, e);
     }
   },
 };
@@ -181,6 +231,14 @@ const clickOnAnchorWithOnClickText = async (page, onClickText) => {
   } catch (e) {
     console.log('on clickOnAnchorWithOnClickText', e);
   }
+};
+
+const setUpDirectory = (className, actionName) => {
+  const downloadPath = path.resolve(
+    `${DOWNLOAD_PATH}/${className}/${actionName}`
+  );
+  dir.createDirectoryIfNotExists(downloadPath);
+  return downloadPath;
 };
 
 module.exports = sigifc;
